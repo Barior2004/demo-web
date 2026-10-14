@@ -4,4 +4,4 @@ numpy==2.2.3
 Pillow==11.1.0
 ultralytics==8.3.234
 onnx==1.19.1
-onnxruntime-gpu==1.26.0
+onnxruntime-gpu==1.30.0
