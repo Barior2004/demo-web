@@ -1,0 +1,9 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pem
+.env
+best_v11.onnx
+*.mp4
