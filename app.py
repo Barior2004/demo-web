@@ -46,7 +46,7 @@ gpu_ready = (
 # Mặc định bật để tránh vô tình đo CPU trên EC2 GPU.
 require_gpu = st.sidebar.checkbox(
     "Bắt buộc sử dụng NVIDIA GPU",
-    value=False,
+    value=True,
     help=(
         "Khi test EC2 g4dn.xlarge nên luôn bật. "
         "Chỉ tắt nếu muốn chạy thử trên máy không có GPU."
