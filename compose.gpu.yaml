@@ -1,0 +1,16 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: demo-web:gpu
+    container_name: demo-web-gpu
+    restart: unless-stopped
+    init: true
+    gpus: all
+    ports:
+      - "8501:8501"
+    environment:
+      YOLO_CONFIG_DIR: /tmp/Ultralytics
+    volumes:
+      - ./best_v11.onnx:/app/best_v11.onnx:ro
