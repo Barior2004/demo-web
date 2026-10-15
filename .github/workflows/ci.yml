@@ -1,0 +1,41 @@
+name: CI checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Python and Docker configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Check Python syntax
+        run: python3 -m py_compile app.py
+
+      - name: Validate GPU Compose file
+        run: docker compose -f compose.gpu.yaml config --quiet
+
+      - name: Check CPU Dockerfile
+        run: docker buildx build --check -f Dockerfile .
+
+      - name: Check GPU Dockerfile
+        run: docker buildx build --check -f Dockerfile.gpu .
