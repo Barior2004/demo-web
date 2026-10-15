@@ -31,6 +31,9 @@ jobs:
       - name: Check Python syntax
         run: python3 -m py_compile app.py
 
+      - name: Check EC2 deployment script syntax
+        run: bash -n deploy-ec2.sh
+
       - name: Validate GPU Compose file
         run: docker compose -f compose.gpu.yaml config --quiet
 
