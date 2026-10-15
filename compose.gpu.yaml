@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gpu
-    image: demo-web:gpu
+    image: demo-web:gpu-optimized
     container_name: demo-web-gpu
     restart: unless-stopped
     init: true
