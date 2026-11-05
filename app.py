@@ -32,15 +32,6 @@ st.markdown("Hệ thống nhận diện phương tiện/người sử dụng mô
 # ==========================================
 st.sidebar.header("⚙️ Cấu hình hệ thống")
 
-# Model cố định để kết quả benchmark giữa các máy
-# có thể so sánh công bằng.
-
-WARMUP_RUNS = 10
-IMAGE_BENCHMARK_RUNS = 50
-PREDICT_CONF = 0.44
-PREDICT_IOU = 0.60
-MAX_DETECTIONS = 100
-
 model_path = DEFAULT_MODEL_PATH
 model_exists = os.path.isfile(model_path)
 
