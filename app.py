@@ -8,7 +8,17 @@ from PIL import Image
 from ultralytics import YOLO
 import onnxruntime as ort
 import torch
-
+from benchmark_core.config import (
+    DEFAULT_MODEL_PATH,
+    IMAGE_BENCHMARK_RUNS,
+    INPUT_IMAGE_SIZE,
+    MAX_DETECTIONS,
+    PREDICT_CONF,
+    PREDICT_IOU,
+    WARMUP_RUNS,
+    validate_config,
+)
+validate_config()
 # ==========================================
 # CẤU HÌNH TRANG VÀ TIÊU ĐỀ
 # ==========================================
@@ -24,10 +34,6 @@ st.sidebar.header("⚙️ Cấu hình hệ thống")
 
 # Model cố định để kết quả benchmark giữa các máy
 # có thể so sánh công bằng.
-DEFAULT_MODEL_PATH = os.getenv(
-    "MODEL_PATH",
-    "best_v11.onnx"
-)
 
 WARMUP_RUNS = 10
 IMAGE_BENCHMARK_RUNS = 50
@@ -105,7 +111,9 @@ if model_exists:
 else:
     st.error(
         f"❌ Không tìm thấy model `{model_path}`. "
-        "Hãy đặt `best_v11.onnx` cùng thư mục với `app.py`."
+        "Không tìm thấy model YOLOv10. "
+        "Hãy kiểm tra file "
+        "`models/yolov10n_final_coordattn.onnx`."
     )
     st.stop()
 
@@ -140,15 +148,19 @@ def load_model(path, inference_device):
     loaded_model = YOLO(path, task="detect")
 
     dummy_frame = np.zeros(
-        (640, 640, 3),
-        dtype=np.uint8
+        (
+            INPUT_IMAGE_SIZE,
+            INPUT_IMAGE_SIZE,
+            3,
+        ),
+        dtype=np.uint8,
     )
 
     for _ in range(WARMUP_RUNS):
         loaded_model.predict(
             source=dummy_frame,
             device=inference_device,
-            imgsz=640,
+            imgsz=INPUT_IMAGE_SIZE,
             conf=PREDICT_CONF,
             iou=PREDICT_IOU,
             max_det=MAX_DETECTIONS,
@@ -243,7 +255,7 @@ if input_file is not None and model is not None:
                     results = model.predict(
                         source=image_bgr,
                         device=INFERENCE_DEVICE,
-                        imgsz=640,
+                        imgsz=INPUT_IMAGE_SIZE,
                         conf=PREDICT_CONF,
                         iou=PREDICT_IOU,
                         max_det=MAX_DETECTIONS,
@@ -424,7 +436,7 @@ if input_file is not None and model is not None:
                         results = model.predict(
                             source=frame,
                             device=INFERENCE_DEVICE,
-                            imgsz=640,
+                            imgsz=INPUT_IMAGE_SIZE,
                             conf=PREDICT_CONF,
                             iou=PREDICT_IOU,
                             max_det=MAX_DETECTIONS,
