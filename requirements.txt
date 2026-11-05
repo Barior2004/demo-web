@@ -1,6 +1,9 @@
-streamlit
-opencv-python-headless
-numpy
-Pillow
-ultralytics
-onnxruntime
+streamlit==1.47.0
+opencv-python-headless==4.11.0.86
+numpy==2.2.3
+Pillow==11.1.0
+ultralytics==8.4.184
+onnxruntime==1.30.0
+packaging==25.0
+protobuf==6.33.6
+imageio-ffmpeg==0.6.0

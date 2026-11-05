@@ -29,10 +29,16 @@ jobs:
           persist-credentials: false
 
       - name: Check Python syntax
-        run: python3 -m compileall -q app.py benchmark_core
+        run: python3 -m compileall -q app.py benchmark_core tests
 
       - name: Validate benchmark configuration
         run: python3 -c "from benchmark_core.config import validate_config; validate_config(); print('Benchmark config OK')"
+
+      - name: Install video output test dependencies
+        run: python3 -m pip install imageio-ffmpeg==0.6.0 numpy==2.2.3
+
+      - name: Test annotated video output
+        run: python3 -m unittest discover -s tests -v
 
       - name: Check EC2 deployment script syntax
         run: bash -n deploy-ec2.sh
