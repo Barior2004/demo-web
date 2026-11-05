@@ -29,7 +29,10 @@ jobs:
           persist-credentials: false
 
       - name: Check Python syntax
-        run: python3 -m py_compile app.py
+        run: python3 -m compileall -q app.py benchmark_core
+
+      - name: Validate benchmark configuration
+        run: python3 -c "from benchmark_core.config import validate_config; validate_config(); print('Benchmark config OK')"
 
       - name: Check EC2 deployment script syntax
         run: bash -n deploy-ec2.sh
