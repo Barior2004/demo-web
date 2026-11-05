@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -14,7 +14,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN python -m pip install --upgrade pip \
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install \
+        torch==2.14.1+cpu \
+        torchvision==0.29.2+cpu \
+        --index-url https://download.pytorch.org/whl/cpu \
     && python -m pip install -r requirements.txt
 
 COPY app.py ./

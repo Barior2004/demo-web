@@ -18,6 +18,7 @@ from benchmark_core.config import (
     WARMUP_RUNS,
     validate_config,
 )
+from benchmark_core.video_output import H264VideoWriter
 validate_config()
 # ==========================================
 # CẤU HÌNH TRANG VÀ TIÊU ĐỀ
@@ -121,8 +122,9 @@ DISPLAY_EVERY = st.sidebar.slider(
     max_value=10,
     value=3,
     help=(
-        "Giá trị 1 hiển thị mọi frame nhưng có thể làm Streamlit "
-        "chậm. Giá trị 3 phù hợp để đo hiệu năng model."
+        "Chỉ điều khiển preview trong lúc xử lý. Video kết quả "
+        "luôn chứa detection trên mọi frame. Giá trị 3 giúp "
+        "preview Streamlit ổn định hơn."
     )
 )
 # ==========================================
@@ -378,7 +380,9 @@ if input_file is not None and model is not None:
                 
                 # Lưu file video ra bộ nhớ tạm trên ổ cứng để OpenCV có thể đọc theo từng frame
                 temp_video_path = None
+                output_video_path = None
                 cap = None
+                video_writer = None
 
                 try:
                     # Lưu xong và đóng file trước khi OpenCV mở.
@@ -396,6 +400,31 @@ if input_file is not None and model is not None:
                         st.stop()
 
                     source_fps = cap.get(cv2.CAP_PROP_FPS)
+                    output_fps = (
+                        float(source_fps)
+                        if np.isfinite(source_fps) and source_fps > 0
+                        else 30.0
+                    )
+                    frame_width = int(
+                        cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+                    )
+                    frame_height = int(
+                        cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                    )
+
+                    with tempfile.NamedTemporaryFile(
+                        delete=False,
+                        suffix=".mp4",
+                    ) as output_video:
+                        output_video_path = output_video.name
+
+                    video_writer = H264VideoWriter(
+                        output_video_path,
+                        width=frame_width,
+                        height=frame_height,
+                        fps=output_fps,
+                    ).open()
+
                     stframe = result_placeholder.empty()
 
                     # Danh sách lưu kết quả của từng frame.
@@ -405,6 +434,7 @@ if input_file is not None and model is not None:
                     postprocess_times = []
                     model_call_times = []
                     render_times = []
+                    encode_times = []
                     compute_times = []
 
                     total_frames = 0
@@ -451,33 +481,43 @@ if input_file is not None and model is not None:
                             speed.get("postprocess", 0.0)
                         )
 
-                        # 3. Vẽ bounding box.
-                        # Chỉ vẽ frame sẽ được gửi lên trình duyệt.
+                        # 3. Vẽ detection trên mọi frame để tạo video output.
+                        render_start = time.perf_counter_ns()
+
+                        plotted_frame = results[0].plot()
+
+                        render_ms = (
+                            time.perf_counter_ns() - render_start
+                        ) / 1_000_000
+
+                        # 4. Mã hóa frame đã vẽ thành MP4 H.264.
+                        encode_start = time.perf_counter_ns()
+
+                        video_writer.write(plotted_frame)
+
+                        encode_ms = (
+                            time.perf_counter_ns() - encode_start
+                        ) / 1_000_000
+
+                        # DISPLAY_EVERY chỉ giảm số lần cập nhật preview.
                         should_display = (
                             total_frames == 0
                             or (total_frames + 1) % DISPLAY_EVERY == 0
                         )
 
-                        render_ms = 0.0
                         result_rgb = None
 
                         if should_display:
-                            render_start = time.perf_counter_ns()
-
-                            plotted_frame = results[0].plot()
                             result_rgb = cv2.cvtColor(
                                 plotted_frame,
                                 cv2.COLOR_BGR2RGB,
                             )
 
-                            render_ms = (
-                                time.perf_counter_ns() - render_start
-                            ) / 1_000_000
-
                         compute_ms = (
                             decode_ms
                             + model_call_ms
                             + render_ms
+                            + encode_ms
                         )
 
                         decode_times.append(decode_ms)
@@ -486,6 +526,7 @@ if input_file is not None and model is not None:
                         postprocess_times.append(postprocess_ms)
                         model_call_times.append(model_call_ms)
                         render_times.append(render_ms)
+                        encode_times.append(encode_ms)
                         compute_times.append(compute_ms)
 
                         total_frames += 1
@@ -517,6 +558,7 @@ if input_file is not None and model is not None:
                                 np.mean(model_call_times)
                             )
                             avg_render = float(np.mean(render_times))
+                            avg_encode = float(np.mean(encode_times))
                             avg_compute = float(np.mean(compute_times))
 
                             p50_model = float(
@@ -571,21 +613,35 @@ if input_file is not None and model is not None:
                                     f"{p95_model:.2f} ms"
                                 )
 
-                                mc7, mc8 = st.columns(2)
+                                mc7, mc8, mc9 = st.columns(3)
                                 mc7.metric(
+                                    "Mã hóa video trung bình",
+                                    f"{avg_encode:.2f} ms"
+                                )
+                                mc8.metric(
                                     "Compute FPS",
                                     f"{compute_fps:.2f} FPS"
                                 )
-                                mc8.metric(
+                                mc9.metric(
                                     "Streamlit FPS",
                                     f"{end_to_end_fps:.2f} FPS"
                                 )
 
+                    video_writer.close()
+                    video_writer = None
+
                     if total_frames == 0:
                         st.error("❌ Video không có frame hợp lệ.")
                     else:
+                        stframe.video(
+                            output_video_path,
+                            format="video/mp4",
+                            autoplay=True,
+                            muted=True,
+                        )
                         st.success(
-                            f"✅ Đã xử lý xong {total_frames} frame."
+                            f"✅ Đã xử lý xong {total_frames} frame. "
+                            "Video kết quả chứa detection trên mọi frame."
                         )
 
                 except Exception as e:
@@ -595,8 +651,17 @@ if input_file is not None and model is not None:
                     if cap is not None:
                         cap.release()
 
+                    if video_writer is not None:
+                        video_writer.close()
+
                     if (
                         temp_video_path is not None
                         and os.path.exists(temp_video_path)
                     ):
                         os.remove(temp_video_path)
+
+                    if (
+                        output_video_path is not None
+                        and os.path.exists(output_video_path)
+                    ):
+                        os.remove(output_video_path)
