@@ -31,6 +31,9 @@ DEFAULT_MODEL_PATH = os.getenv(
 
 WARMUP_RUNS = 10
 IMAGE_BENCHMARK_RUNS = 50
+PREDICT_CONF = 0.44
+PREDICT_IOU = 0.60
+MAX_DETECTIONS = 100
 
 model_path = DEFAULT_MODEL_PATH
 model_exists = os.path.isfile(model_path)
@@ -145,7 +148,11 @@ def load_model(path, inference_device):
         loaded_model.predict(
             source=dummy_frame,
             device=inference_device,
-            verbose=False
+            imgsz=640,
+            conf=PREDICT_CONF,
+            iou=PREDICT_IOU,
+            max_det=MAX_DETECTIONS,
+            verbose=False,
         )
 
     return loaded_model
@@ -236,9 +243,12 @@ if input_file is not None and model is not None:
                     results = model.predict(
                         source=image_bgr,
                         device=INFERENCE_DEVICE,
-                        verbose=False
+                        imgsz=640,
+                        conf=PREDICT_CONF,
+                        iou=PREDICT_IOU,
+                        max_det=MAX_DETECTIONS,
+                        verbose=False,
                     )
-
                     model_call_ms = (
                         time.perf_counter_ns() - model_start
                     ) / 1_000_000
@@ -414,7 +424,11 @@ if input_file is not None and model is not None:
                         results = model.predict(
                             source=frame,
                             device=INFERENCE_DEVICE,
-                            verbose=False
+                            imgsz=640,
+                            conf=PREDICT_CONF,
+                            iou=PREDICT_IOU,
+                            max_det=MAX_DETECTIONS,
+                            verbose=False,
                         )
 
                         model_call_ms = (
