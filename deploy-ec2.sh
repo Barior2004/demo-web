@@ -5,7 +5,7 @@ set -Eeuo pipefail
 readonly COMPOSE_FILE="compose.gpu.yaml"
 readonly IMAGE_NAME="demo-web:gpu-optimized"
 readonly ROLLBACK_IMAGE="demo-web:gpu-rollback"
-readonly MODEL_FILE="best_v11.onnx"
+readonly MODEL_FILE="models/yolov10n_final_coordattn.onnx"
 readonly HEALTH_URL="http://127.0.0.1:8501/_stcore/health"
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -73,9 +73,13 @@ fi
 echo "[5/7] Build image GPU mới (container hiện tại vẫn tiếp tục chạy)"
 "${DOCKER[@]}" compose -f "${COMPOSE_FILE}" build app
 
-echo "[6/7] Kiểm tra CUDA trong image mới"
-"${DOCKER[@]}" run --rm --gpus all "${IMAGE_NAME}" \
-    python -c "import torch, onnxruntime as ort; assert torch.cuda.is_available(); print('GPU:', torch.cuda.get_device_name(0)); print('ORT providers:', ort.get_available_providers()); assert 'CUDAExecutionProvider' in ort.get_available_providers()"
+echo "[6/7] Kiểm tra CUDA và suy luận YOLOv10 trong image mới"
+"${DOCKER[@]}" run --rm --gpus all \
+    -e YOLO_CONFIG_DIR=/tmp/Ultralytics \
+    -e MODEL_PATH="/app/${MODEL_FILE}" \
+    --mount "type=bind,source=${REPO_DIR}/${MODEL_FILE},target=/app/${MODEL_FILE},readonly" \
+    "${IMAGE_NAME}" \
+    python -c "import numpy as np, torch, onnxruntime as ort; from ultralytics import YOLO; from benchmark_core.config import DEFAULT_MODEL_PATH, INPUT_IMAGE_SIZE, MAX_DETECTIONS, PREDICT_CONF, PREDICT_IOU; assert torch.cuda.is_available(), 'CUDA không khả dụng'; providers = ort.get_available_providers(); assert 'CUDAExecutionProvider' in providers, providers; model = YOLO(DEFAULT_MODEL_PATH, task='detect'); result = model.predict(np.zeros((INPUT_IMAGE_SIZE, INPUT_IMAGE_SIZE, 3), dtype=np.uint8), imgsz=INPUT_IMAGE_SIZE, device=0, conf=PREDICT_CONF, iou=PREDICT_IOU, max_det=MAX_DETECTIONS, verbose=False); print('GPU:', torch.cuda.get_device_name(0)); print('ORT providers:', providers); print('YOLOv10 inference OK:', result[0].speed)"
 
 echo "[7/7] Thay container và đợi health check"
 "${DOCKER[@]}" compose -f "${COMPOSE_FILE}" up -d --no-build --force-recreate
