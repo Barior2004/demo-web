@@ -29,6 +29,7 @@ RUN python -m venv --system-site-packages "${VIRTUAL_ENV}" \
     && python -m pip install -r requirements-aws-gpu.txt
 
 COPY app.py ./
+COPY benchmark_core ./benchmark_core
 
 EXPOSE 8501
 

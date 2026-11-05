@@ -18,6 +18,7 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt
 
 COPY app.py ./
+COPY benchmark_core ./benchmark_core
 
 EXPOSE 8501
 

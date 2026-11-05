@@ -12,5 +12,6 @@ services:
       - "8501:8501"
     environment:
       YOLO_CONFIG_DIR: /tmp/Ultralytics
+      MODEL_PATH: /app/models/yolov10n_final_coordattn.onnx
     volumes:
-      - ./best_v11.onnx:/app/best_v11.onnx:ro
+      - ./models/yolov10n_final_coordattn.onnx:/app/models/yolov10n_final_coordattn.onnx:ro
