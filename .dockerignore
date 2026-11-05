@@ -8,4 +8,11 @@ __pycache__
 *.pem
 .env
 *.mp4
-best_v11.onnx
+runs/
+yolov10n_final_proposed_results/
+*.pt
+*.onnx
+*.engine
+*.db
+data/
+.codex_*

@@ -5,5 +5,20 @@ __pycache__/
 *.pyo
 *.pem
 .env
-best_v11.onnx
 *.mp4
+
+# Training outputs and datasets
+runs/
+yolov10n_final_proposed_results/
+
+# AI model artifacts
+*.pt
+*.onnx
+*.engine
+
+# Runtime data
+*.db
+data/
+
+# Temporary files
+.codex_*
