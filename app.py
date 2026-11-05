@@ -120,11 +120,11 @@ DISPLAY_EVERY = st.sidebar.slider(
     "Hiển thị mỗi N frame",
     min_value=1,
     max_value=10,
-    value=3,
+    value=1,
     help=(
-        "Chỉ điều khiển preview trong lúc xử lý. Video kết quả "
-        "luôn chứa detection trên mọi frame. Giá trị 3 giúp "
-        "preview Streamlit ổn định hơn."
+        "Giá trị 1 phát preview detection theo thời gian thực. "
+        "Giá trị lớn hơn giảm số lần cập nhật giao diện. Video "
+        "kết quả vẫn chứa detection trên mọi frame."
     )
 )
 # ==========================================
@@ -439,6 +439,10 @@ if input_file is not None and model is not None:
 
                     total_frames = 0
                     benchmark_start = time.perf_counter_ns()
+                    preview_interval_seconds = (
+                        DISPLAY_EVERY / output_fps
+                    )
+                    next_preview_deadline = time.perf_counter()
 
                     while cap.isOpened():
                         # 1. Đọc frame từ video.
@@ -582,7 +586,8 @@ if input_file is not None and model is not None:
                                 st.caption(
                                     f"Video gốc: {source_fps:.2f} FPS | "
                                     f"Đã xử lý: {total_frames} frame | "
-                                    f"Hiển thị mỗi {DISPLAY_EVERY} frame"
+                                    "Preview realtime mỗi "
+                                    f"{DISPLAY_EVERY} frame"
                                 )
 
                                 mc1, mc2, mc3 = st.columns(3)
@@ -623,9 +628,26 @@ if input_file is not None and model is not None:
                                     f"{compute_fps:.2f} FPS"
                                 )
                                 mc9.metric(
-                                    "Streamlit FPS",
+                                    "Realtime Preview FPS",
                                     f"{end_to_end_fps:.2f} FPS"
                                 )
+
+                            # Đồng bộ preview với FPS video gốc để
+                            # trình duyệt có thời gian hiển thị từng frame.
+                            next_preview_deadline += (
+                                preview_interval_seconds
+                            )
+                            preview_wait_seconds = (
+                                next_preview_deadline
+                                - time.perf_counter()
+                            )
+
+                            if preview_wait_seconds > 0:
+                                time.sleep(preview_wait_seconds)
+                            else:
+                                # Nếu xử lý chậm hơn realtime, không cố
+                                # chạy bù vì sẽ làm preview giật theo cụm.
+                                next_preview_deadline = time.perf_counter()
 
                     video_writer.close()
                     video_writer = None
