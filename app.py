@@ -449,17 +449,27 @@ if input_file is not None and model is not None:
                         )
 
                         # 3. Vẽ bounding box.
-                        render_start = time.perf_counter_ns()
-
-                        plotted_frame = results[0].plot()
-                        result_rgb = cv2.cvtColor(
-                            plotted_frame,
-                            cv2.COLOR_BGR2RGB
+                        # Chỉ vẽ frame sẽ được gửi lên trình duyệt.
+                        should_display = (
+                            total_frames == 0
+                            or (total_frames + 1) % DISPLAY_EVERY == 0
                         )
 
-                        render_ms = (
-                            time.perf_counter_ns() - render_start
-                        ) / 1_000_000
+                        render_ms = 0.0
+                        result_rgb = None
+
+                        if should_display:
+                            render_start = time.perf_counter_ns()
+
+                            plotted_frame = results[0].plot()
+                            result_rgb = cv2.cvtColor(
+                                plotted_frame,
+                                cv2.COLOR_BGR2RGB,
+                            )
+
+                            render_ms = (
+                                time.perf_counter_ns() - render_start
+                            ) / 1_000_000
 
                         compute_ms = (
                             decode_ms
@@ -479,13 +489,10 @@ if input_file is not None and model is not None:
 
                         # Không gửi mọi frame lên trình duyệt.
                         # Việc này tránh Streamlit làm sai lệch FPS của model.
-                        if (
-                            total_frames == 1
-                            or total_frames % DISPLAY_EVERY == 0
-                        ):
+                        if should_display and result_rgb is not None:
                             stframe.image(
                                 result_rgb,
-                                use_container_width=True
+                                use_container_width=True,
                             )
 
                             elapsed_seconds = (
