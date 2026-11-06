@@ -14,5 +14,8 @@ yolov10n_final_proposed_results/
 *.onnx
 *.engine
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 data/
 .codex_*

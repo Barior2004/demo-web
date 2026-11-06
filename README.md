@@ -1,5 +1,16 @@
 # Triển khai Demo Web AI lên AWS EC2 GPU
 
+## Lưu benchmark (measurement protocol v1)
+
+Mỗi lần phân tích ảnh/video hoàn tất được lưu vào `data/benchmarks.db` (SQLite),
+kèm mã lần chạy, thời gian UTC, SHA256 model/input, cấu hình và phiên bản runtime.
+Có thể đổi đường dẫn bằng `BENCHMARK_DB_PATH`. Compose giữ `./data` ngoài container.
+Không lưu ảnh/video vào database; trang lịch sử và xuất báo cáo sẽ bổ sung sau.
+
+Các chỉ số video phân biệt xử lý chủ động, thông lượng vòng lặp server và số
+preview gửi cho Streamlit; chúng không đo FPS hiển thị thực tế trên trình duyệt.
+Xem [phạm vi phép đo và cách kiểm thử](docs/benchmark-measurement.md).
+
 
 ## 1. Kiến trúc hiện tại
 

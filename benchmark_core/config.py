@@ -1,5 +1,7 @@
 import os
 
+BENCHMARK_DB_PATH = os.getenv("BENCHMARK_DB_PATH", "data/benchmarks.db")
+
 
 DEFAULT_MODEL_PATH = os.getenv(
     "MODEL_PATH",
