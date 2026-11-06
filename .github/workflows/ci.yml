@@ -37,7 +37,7 @@ jobs:
       - name: Install video output test dependencies
         run: python3 -m pip install imageio-ffmpeg==0.6.0 numpy==2.2.3
 
-      - name: Test annotated video output
+      - name: Test benchmark measurements, storage and video output
         run: python3 -m unittest discover -s tests -v
 
       - name: Check EC2 deployment script syntax

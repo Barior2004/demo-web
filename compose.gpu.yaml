@@ -13,5 +13,7 @@ services:
     environment:
       YOLO_CONFIG_DIR: /tmp/Ultralytics
       MODEL_PATH: /app/models/yolov10n_final_coordattn.onnx
+      BENCHMARK_DB_PATH: /app/data/benchmarks.db
     volumes:
       - ./models/yolov10n_final_coordattn.onnx:/app/models/yolov10n_final_coordattn.onnx:ro
+      - ./data:/app/data

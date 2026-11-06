@@ -4,11 +4,15 @@ import numpy as np
 import time
 import os
 import tempfile
+import hashlib
+import threading
+import sqlite3
 from PIL import Image
 from ultralytics import YOLO
 import onnxruntime as ort
 import torch
 from benchmark_core.config import (
+    BENCHMARK_DB_PATH,
     DEFAULT_MODEL_PATH,
     IMAGE_BENCHMARK_RUNS,
     INPUT_IMAGE_SIZE,
@@ -19,6 +23,10 @@ from benchmark_core.config import (
     validate_config,
 )
 from benchmark_core.video_output import H264VideoWriter
+from benchmark_core.metrics import summarize_samples, summarize_video
+from benchmark_core.reporting import (
+    BenchmarkStore, new_record, runtime_versions, sha256_file, utc_now,
+)
 validate_config()
 # ==========================================
 # CẤU HÌNH TRANG VÀ TIÊU ĐỀ
@@ -133,7 +141,7 @@ DISPLAY_EVERY = st.sidebar.slider(
 
 # Hàm load model (Sử dụng cache để không phải load lại mỗi khi tương tác UI)
 @st.cache_resource
-def load_model(path, inference_device):
+def load_model(path, inference_device, model_sha256):
     """
     Load model một lần và warm-up trước khi benchmark.
     Warm-up loại bỏ thời gian khởi tạo CUDA khỏi kết quả.
@@ -160,7 +168,83 @@ def load_model(path, inference_device):
             verbose=False,
         )
 
-    return loaded_model
+    # Streamlit shares cached resources between sessions. Serialize predict
+    # calls so another session cannot overlap or mutate the same predictor.
+    return loaded_model, threading.RLock()
+
+
+def measured_predict(frame):
+    with model_lock:
+        if INFERENCE_DEVICE != "cpu":
+            torch.cuda.synchronize(INFERENCE_DEVICE)
+        started = time.perf_counter_ns()
+        predictions = model.predict(
+            source=frame,
+            device=INFERENCE_DEVICE,
+            imgsz=INPUT_IMAGE_SIZE,
+            conf=PREDICT_CONF,
+            iou=PREDICT_IOU,
+            max_det=MAX_DETECTIONS,
+            verbose=False,
+        )
+        if INFERENCE_DEVICE != "cpu":
+            torch.cuda.synchronize(INFERENCE_DEVICE)
+        duration_ms = (time.perf_counter_ns() - started) / 1_000_000
+    return predictions, duration_ms
+
+
+def save_run(record, metrics):
+    record["metrics"] = metrics
+    record["completed_at_utc"] = utc_now()
+    backend = getattr(getattr(model, "predictor", None), "model", None)
+    session = getattr(backend, "session", None)
+    record["environment"]["session_providers"] = (
+        session.get_providers() if session is not None else []
+    )
+    try:
+        run_id = BenchmarkStore(BENCHMARK_DB_PATH).save_completed(record)
+        st.session_state["last_benchmark_run_id"] = run_id
+        st.success(f"Đã lưu kết quả benchmark — mã lần chạy: {run_id}")
+    except (OSError, ValueError, sqlite3.Error) as error:
+        st.error(f"Phân tích hoàn tất nhưng KHÔNG lưu được kết quả: {error}")
+
+
+def show_video_metrics(metrics, stages, source_fps):
+    model_stats = metrics["model_call"]
+    with metrics_placeholder.container():
+        st.caption(
+            f"Video gốc: {source_fps:.2f} FPS | "
+            f"Đã xử lý: {metrics['frame_count']} frame | "
+            f"Preview mỗi {DISPLAY_EVERY} frame"
+        )
+        columns = st.columns(3)
+        for column, label, key in zip(columns, (
+            "Decode trung bình", "Inference nội bộ", "Vẽ kết quả trung bình"
+        ), ("decode", "inference_internal", "render")):
+            column.metric(label, f"{stages[key]['mean_ms']:.2f} ms")
+        columns = st.columns(3)
+        for column, label, key in zip(columns, (
+            "Model call trung bình", "Model call p50", "Model call p95"
+        ), ("mean_ms", "p50_ms", "p95_ms")):
+            column.metric(label, f"{model_stats[key]:.2f} ms")
+        columns = st.columns(3)
+        for column, label, key in zip(columns, (
+            "Xử lý chủ động phía server", "Thông lượng vòng lặp server", "Gửi preview từ server"
+        ), ("active_processing_fps", "server_wall_fps", "preview_submission_fps")):
+            value = metrics[key]
+            column.metric(label, f"{value:.2f} FPS" if value is not None else "N/A")
+        columns = st.columns(3)
+        model_fps = model_stats["fps"]
+        columns[0].metric("Model FPS", f"{model_fps:.2f} FPS" if model_fps is not None else "N/A")
+        if "encode_submit" in stages:
+            columns[1].metric("Gửi frame tới encoder", f"{stages['encode_submit']['mean_ms']:.2f} ms")
+        columns[2].metric("Hoàn tất MP4", f"{metrics['encoder_finalize_ms']:.2f} ms")
+        st.caption(
+            "Xử lý chủ động loại thời gian UI/chờ nhịp video; "
+            "vòng lặp server có tính UI/chờ. Gửi preview là số ảnh gửi "
+            "cho Streamlit, không phải FPS hiển thị trên trình duyệt. "
+            "Số liệu trong lúc chạy là tạm thời; kết quả cuối tính cả hoàn tất MP4."
+        )
 
 
 model = None
@@ -171,9 +255,11 @@ if model_exists:
             f"Đang load và warm-up model "
             f"{WARMUP_RUNS} lần..."
         ):
-            model = load_model(
+            model_sha256 = sha256_file(model_path)
+            model, model_lock = load_model(
                 model_path,
-                INFERENCE_DEVICE
+                INFERENCE_DEVICE,
+                model_sha256,
             )
 
         st.success("✅ Model đã load và warm-up thành công.")
@@ -209,13 +295,37 @@ if input_file is not None and model is not None:
         result_placeholder = st.empty()
         
         if start_btn:
+            record = new_record(
+                "video" if file_type == "mp4" else "image",
+                model={"name": os.path.basename(model_path), "sha256": model_sha256},
+                input_info={
+                    "name": os.path.basename(input_file.name),
+                    "sha256": hashlib.sha256(input_file.getbuffer()).hexdigest(),
+                    "size_bytes": input_file.size,
+                },
+                config={
+                    "imgsz": INPUT_IMAGE_SIZE, "conf": PREDICT_CONF,
+                    "iou": PREDICT_IOU, "max_det": MAX_DETECTIONS,
+                    "warmup_runs": WARMUP_RUNS, "warmup": "cached_model_synthetic_frames",
+                    "image_runs": IMAGE_BENCHMARK_RUNS,
+                    "display_every": DISPLAY_EVERY, "pacing": file_type == "mp4",
+                    "gpu_synchronized": INFERENCE_DEVICE != "cpu",
+                },
+                environment={
+                    **runtime_versions(), "device": device_name,
+                    "available_providers": available_providers,
+                    "torch_cuda_version": torch.version.cuda,
+                    "app_revision": os.getenv("APP_REVISION", "unknown"),
+                },
+            )
             if file_type in ['jpg', 'jpeg', 'png']:
+                image_wall_start = time.perf_counter_ns()
                 # ==============================
                 # XỬ LÝ ẢNH (IMAGE PROCESSING)
                 # ==============================
                 
                 # 1. Pre-processing (Tiền xử lý)
-                                # Chuyển ảnh sang định dạng OpenCV.
+                # Chuyển ảnh sang định dạng OpenCV.
                 convert_start = time.perf_counter_ns()
 
                 image_array = np.array(image)
@@ -243,20 +353,7 @@ if input_file is not None and model is not None:
                 # Chạy nhiều lần để kết quả không bị phụ thuộc
                 # vào một lần inference ngẫu nhiên.
                 for run_index in range(IMAGE_BENCHMARK_RUNS):
-                    model_start = time.perf_counter_ns()
-
-                    results = model.predict(
-                        source=image_bgr,
-                        device=INFERENCE_DEVICE,
-                        imgsz=INPUT_IMAGE_SIZE,
-                        conf=PREDICT_CONF,
-                        iou=PREDICT_IOU,
-                        max_det=MAX_DETECTIONS,
-                        verbose=False,
-                    )
-                    model_call_ms = (
-                        time.perf_counter_ns() - model_start
-                    ) / 1_000_000
+                    results, model_call_ms = measured_predict(image_bgr)
 
                     speed = results[0].speed or {}
 
@@ -295,6 +392,11 @@ if input_file is not None and model is not None:
                     time.perf_counter_ns() - render_start
                 ) / 1_000_000
 
+                image_wall_seconds = (
+                    time.perf_counter_ns() - image_wall_start
+                ) / 1_000_000_000
+                model_stats = summarize_samples(model_call_times)
+
                 avg_preprocess = float(
                     np.mean(preprocess_times)
                 )
@@ -304,21 +406,12 @@ if input_file is not None and model is not None:
                 avg_postprocess = float(
                     np.mean(postprocess_times)
                 )
-                avg_model_call = float(
-                    np.mean(model_call_times)
-                )
+                avg_model_call = model_stats["mean_ms"]
 
-                p50_model = float(
-                    np.percentile(model_call_times, 50)
-                )
-                p95_model = float(
-                    np.percentile(model_call_times, 95)
-                )
+                p50_model = model_stats["p50_ms"]
+                p95_model = model_stats["p95_ms"]
 
-                model_fps = (
-                    1000 / avg_model_call
-                    if avg_model_call > 0 else 0
-                )
+                model_fps = model_stats["fps"]
 
                 with metrics_placeholder.container():
                     st.caption(
@@ -357,7 +450,7 @@ if input_file is not None and model is not None:
                     mc7, mc8, mc9 = st.columns(3)
                     mc7.metric(
                         "Model FPS",
-                        f"{model_fps:.2f} FPS"
+                        f"{model_fps:.2f} FPS" if model_fps is not None else "N/A"
                     )
                     mc8.metric(
                         "RGB → BGR",
@@ -372,6 +465,16 @@ if input_file is not None and model is not None:
                     result_rgb,
                     use_container_width=True
                 )
+                st.caption("Model FPS đo lời gọi predict đã đồng bộ GPU; không bao gồm vẽ và hiển thị.")
+                record["input"].update({"width": image.width, "height": image.height})
+                save_run(record, {
+                    "model_call": model_stats,
+                    "preprocess_internal": summarize_samples(preprocess_times),
+                    "inference_internal": summarize_samples(inference_times),
+                    "postprocess_internal": summarize_samples(postprocess_times),
+                    "convert_ms_once": convert_ms, "render_ms_once": render_ms,
+                    "benchmark_wall_seconds": image_wall_seconds,
+                })
                 
             elif file_type == 'mp4':
                 # ==============================
@@ -438,6 +541,8 @@ if input_file is not None and model is not None:
                     compute_times = []
 
                     total_frames = 0
+                    preview_submissions = 0
+                    last_metrics_update = float("-inf")
                     benchmark_start = time.perf_counter_ns()
                     preview_interval_seconds = (
                         DISPLAY_EVERY / output_fps
@@ -446,7 +551,8 @@ if input_file is not None and model is not None:
 
                     while cap.isOpened():
                         # 1. Đọc frame từ video.
-                        decode_start = time.perf_counter_ns()
+                        active_frame_start = time.perf_counter_ns()
+                        decode_start = active_frame_start
                         ret, frame = cap.read()
                         decode_ms = (
                             time.perf_counter_ns() - decode_start
@@ -456,21 +562,7 @@ if input_file is not None and model is not None:
                             break
 
                         # 2. Chạy model và bắt buộc sử dụng thiết bị đã chọn.
-                        model_start = time.perf_counter_ns()
-
-                        results = model.predict(
-                            source=frame,
-                            device=INFERENCE_DEVICE,
-                            imgsz=INPUT_IMAGE_SIZE,
-                            conf=PREDICT_CONF,
-                            iou=PREDICT_IOU,
-                            max_det=MAX_DETECTIONS,
-                            verbose=False,
-                        )
-
-                        model_call_ms = (
-                            time.perf_counter_ns() - model_start
-                        ) / 1_000_000
+                        results, model_call_ms = measured_predict(frame)
 
                         # Ultralytics cung cấp thời gian nội bộ.
                         speed = results[0].speed or {}
@@ -518,11 +610,8 @@ if input_file is not None and model is not None:
                             )
 
                         compute_ms = (
-                            decode_ms
-                            + model_call_ms
-                            + render_ms
-                            + encode_ms
-                        )
+                            time.perf_counter_ns() - active_frame_start
+                        ) / 1_000_000
 
                         decode_times.append(decode_ms)
                         preprocess_times.append(preprocess_ms)
@@ -542,95 +631,25 @@ if input_file is not None and model is not None:
                                 result_rgb,
                                 use_container_width=True,
                             )
+                            preview_submissions += 1
 
                             elapsed_seconds = (
                                 time.perf_counter_ns()
                                 - benchmark_start
                             ) / 1_000_000_000
 
-                            avg_decode = float(np.mean(decode_times))
-                            avg_preprocess = float(
-                                np.mean(preprocess_times)
-                            )
-                            avg_inference = float(
-                                np.mean(inference_times)
-                            )
-                            avg_postprocess = float(
-                                np.mean(postprocess_times)
-                            )
-                            avg_model_call = float(
-                                np.mean(model_call_times)
-                            )
-                            avg_render = float(np.mean(render_times))
-                            avg_encode = float(np.mean(encode_times))
-                            avg_compute = float(np.mean(compute_times))
-
-                            p50_model = float(
-                                np.percentile(model_call_times, 50)
-                            )
-                            p95_model = float(
-                                np.percentile(model_call_times, 95)
-                            )
-
-                            compute_fps = (
-                                1000 / avg_compute
-                                if avg_compute > 0 else 0
-                            )
-
-                            end_to_end_fps = (
-                                total_frames / elapsed_seconds
-                                if elapsed_seconds > 0 else 0
-                            )
-
-                            with metrics_placeholder.container():
-                                st.caption(
-                                    f"Video gốc: {source_fps:.2f} FPS | "
-                                    f"Đã xử lý: {total_frames} frame | "
-                                    "Preview realtime mỗi "
-                                    f"{DISPLAY_EVERY} frame"
+                            if time.perf_counter() - last_metrics_update >= 0.5:
+                                live_metrics = summarize_video(
+                                    model_call_times, compute_times,
+                                    elapsed_seconds, 0.0, preview_submissions,
                                 )
-
-                                mc1, mc2, mc3 = st.columns(3)
-                                mc1.metric(
-                                    "Decode trung bình",
-                                    f"{avg_decode:.2f} ms"
-                                )
-                                mc2.metric(
-                                    "Inference trung bình",
-                                    f"{avg_inference:.2f} ms"
-                                )
-                                mc3.metric(
-                                    "Vẽ kết quả trung bình",
-                                    f"{avg_render:.2f} ms"
-                                )
-
-                                mc4, mc5, mc6 = st.columns(3)
-                                mc4.metric(
-                                    "Model call trung bình",
-                                    f"{avg_model_call:.2f} ms"
-                                )
-                                mc5.metric(
-                                    "Model call p50",
-                                    f"{p50_model:.2f} ms"
-                                )
-                                mc6.metric(
-                                    "Model call p95",
-                                    f"{p95_model:.2f} ms"
-                                )
-
-                                mc7, mc8, mc9 = st.columns(3)
-                                mc7.metric(
-                                    "Mã hóa video trung bình",
-                                    f"{avg_encode:.2f} ms"
-                                )
-                                mc8.metric(
-                                    "Compute FPS",
-                                    f"{compute_fps:.2f} FPS"
-                                )
-                                mc9.metric(
-                                    "Realtime Preview FPS",
-                                    f"{end_to_end_fps:.2f} FPS"
-                                )
+                                show_video_metrics(live_metrics, {
+                                    "decode": summarize_samples(decode_times),
+                                    "inference_internal": summarize_samples(inference_times),
+                                    "render": summarize_samples(render_times),
+                                    "encode_submit": summarize_samples(encode_times),
+                                }, output_fps)
+                                last_metrics_update = time.perf_counter()
 
                             # Đồng bộ preview với FPS video gốc để
                             # trình duyệt có thời gian hiển thị từng frame.
@@ -649,12 +668,41 @@ if input_file is not None and model is not None:
                                 # chạy bù vì sẽ làm preview giật theo cụm.
                                 next_preview_deadline = time.perf_counter()
 
+                    finalize_start = time.perf_counter_ns()
                     video_writer.close()
+                    finalize_ms = (
+                        time.perf_counter_ns() - finalize_start
+                    ) / 1_000_000
                     video_writer = None
+                    final_wall_seconds = (
+                        time.perf_counter_ns() - benchmark_start
+                    ) / 1_000_000_000
 
                     if total_frames == 0:
                         st.error("❌ Video không có frame hợp lệ.")
                     else:
+                        if os.path.getsize(output_video_path) == 0:
+                            raise RuntimeError("Encoder không tạo được video kết quả")
+                        stages = {
+                            "decode": summarize_samples(decode_times),
+                            "preprocess_internal": summarize_samples(preprocess_times),
+                            "inference_internal": summarize_samples(inference_times),
+                            "postprocess_internal": summarize_samples(postprocess_times),
+                            "render": summarize_samples(render_times),
+                            "encode_submit": summarize_samples(encode_times),
+                        }
+                        final_metrics = summarize_video(
+                            model_call_times, compute_times,
+                            final_wall_seconds, finalize_ms, preview_submissions,
+                        )
+                        final_metrics["stages"] = stages
+                        show_video_metrics(final_metrics, stages, output_fps)
+                        record["input"].update({
+                            "width": frame_width, "height": frame_height,
+                            "source_fps": float(source_fps) if np.isfinite(source_fps) else None,
+                            "output_fps": output_fps,
+                        })
+                        save_run(record, final_metrics)
                         stframe.video(
                             output_video_path,
                             format="video/mp4",

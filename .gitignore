@@ -18,6 +18,9 @@ yolov10n_final_proposed_results/
 
 # Runtime data
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 data/
 
 # Temporary files
